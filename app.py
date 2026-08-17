@@ -30,17 +30,21 @@ if not check_password():
     st.stop()  
 # ----------------------------------------------------
 
-# ऑटो-रिफ्रेश हर 5 मिनट
 st_autorefresh(interval=300000, key="silver_pro_refresh")
 
-st.title("🪙 सिल्वर प्रो (85% एक्यूरेसी + रिस्क मैनेजमेंट मॉडल)")
-st.markdown("यह डैशबोर्ड **रियल-टाइम लाइव डेटा (भारतीय रुपये ₹ में परिवर्तित)**, **टेक्निकल इंडिकेटर्स** और **स्टॉप-लॉस/टारगेट** के साथ हर 5 मिनट में अपडेट होता है।")
+st.title("🪙 सिल्वर प्रो (MCX एक्यूरेसी मॉडल)")
+st.markdown("यह डैशबोर्ड रियल-टाइम लाइव डेटा और **आपके MCX भाव के सटीक मिलान (Adjustment)** के साथ हर 5 मिनट में अपडेट होता है।")
+
+# --- नया फीचर: साइडबार में MCX प्राइस एडजस्टमेंट ---
+st.sidebar.header("⚙️ MCX प्राइस एडजस्टमेंट")
+st.sidebar.markdown("चूँकि अंतरराष्ट्रीय भाव और भारतीय MCX भाव में प्रीमियम/ड्यूटी का अंतर होता है, इसलिए आप यहाँ वह अंतर (Difference) सेट कर सकते हैं ताकि भाव बिल्कुल सटीक हो जाए।")
+mcx_offset = st.sidebar.number_input("ऐप के भाव और आपके MCX भाव में कितना अंतर है? (उदाहरण: यदि ऐप 1000 कम बता रहा है तो 1000 लिखें, ज्यादा बता रहा है तो -1000 लिखें)", value=0, step=100)
+# ----------------------------------------------------
 
 symbol = "SI=F" 
 
 @st.cache_data(ttl=300)
 def get_advanced_data(ticker):
-    # छुट्टी के दिनों में डेटा खाली न रहे इसलिए 5 दिन को 7 दिन कर दिया गया है
     df = yf.download(ticker, period="7d", interval="15m")
     if df.empty:
         return df
@@ -65,26 +69,23 @@ def get_advanced_data(ticker):
 
 @st.cache_data(ttl=300)
 def get_usdinr():
-    # लाइव डॉलर का भारतीय रुपये में रेट फेच करने के लिए
     try:
         usd_inr_data = yf.download("INR=X", period="5d", interval="1d")
         return float(usd_inr_data['Close'].iloc[-1])
     except:
-        return 84.00 # अगर सर्वर फेल हो तो डिफॉल्ट रेट
+        return 84.00
 
 data = get_advanced_data(symbol)
 
-# सुरक्षा कवच: यदि मार्केट बंद होने से डेटा नहीं आता है, तो एरर नहीं आएगा
 if data.empty:
-    st.warning("⚠️ अभी लाइव डेटा प्राप्त नहीं हो रहा है (संभवतः मार्केट बंद है या सर्वर अपडेट हो रहा है)। कृपया कुछ देर बाद रिफ्रेश करें।")
+    st.warning("⚠️ अभी लाइव डेटा प्राप्त नहीं हो रहा है (संभवतः मार्केट बंद है)। कृपया कुछ देर बाद रिफ्रेश करें।")
     st.stop()
 
 latest = data.iloc[-1]
 usd_inr_rate = get_usdinr()
 
-# 1 ट्रॉय औंस = 31.103 ग्राम। 1 किलो = 32.15 ट्रॉय औंस।
-# भारतीय कस्टम ड्यूटी और प्रीमियम को मिलाकर MCX का गणितीय कन्वर्जन:
-conversion_multiplier = usd_inr_rate * 32.15 * 1.08  
+# 6% ड्यूटी के अनुसार अपडेटेड फॉर्मूला 
+conversion_multiplier = usd_inr_rate * 32.15 * 1.06  
 
 try:
     raw_price = float(latest['Close'].iloc[0]) if isinstance(latest['Close'], pd.Series) else float(latest['Close'])
@@ -99,14 +100,14 @@ except:
     ema50 = float(latest['EMA_50'])
     atr_val = float(latest['ATR']) if not pd.isna(latest['ATR']) else (raw_price * 0.005)
 
-# डॉलर को भारतीय रुपये (प्रति 1 किलोग्राम) में बदलना
-current_price_inr = raw_price * conversion_multiplier
-ema20_inr = ema20 * conversion_multiplier
-ema50_inr = ema50 * conversion_multiplier
-atr_val_inr = atr_val * conversion_multiplier
+# --- यहाँ आपके द्वारा दिया गया एडजस्टमेंट (mcx_offset) जुड़ रहा है ---
+current_price_inr = (raw_price * conversion_multiplier) + mcx_offset
+ema20_inr = (ema20 * conversion_multiplier) + mcx_offset
+ema50_inr = (ema50 * conversion_multiplier) + mcx_offset
+atr_val_inr = atr_val * conversion_multiplier # ATR वोलैटिलिटी है, इसमें ऑफसेट नहीं जुड़ता
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("अनुमानित भाव (1 Kg)", f"₹ {current_price_inr:,.0f}")
+col1.metric("MCX भाव (एडजस्टेड)", f"₹ {current_price_inr:,.0f}")
 col2.metric("RSI (14)", f"{rsi_val:.2f}")
 col3.metric("EMA 20", f"₹ {ema20_inr:,.0f}")
 col4.metric("EMA 50", f"₹ {ema50_inr:,.0f}")
@@ -138,7 +139,7 @@ st.write(f"**कॉन्फिडेंस लेवल:** {conf}")
 
 if stop_loss > 0:
     st.markdown("---")
-    st.subheader("🛡️ रिस्क मैनेजमेंट और लेवल्स (MCX अनुमानित ₹)")
+    st.subheader("🛡️ रिस्क मैनेजमेंट और लेवल्स (MCX भाव के अनुसार)")
     r_col1, r_col2, r_col3 = st.columns(3)
     r_col1.metric("🛑 अनुशंसित स्टॉप-लॉस", f"₹ {stop_loss:,.0f}")
     r_col2.metric("🎯 टारगेट 1", f"₹ {target_1:,.0f}")
@@ -146,4 +147,3 @@ if stop_loss > 0:
 
 st.markdown("---")
 st.caption(f"🔄 **ऑटो-अपडेट स्टेटस:** अंतिम बार अपडेट किया गया - {time.strftime('%Y-%m-%d %H:%M:%S')}")
-st.caption("नोट: यह भाव अंतरराष्ट्रीय कॉमेक्स (Comex) के आधार पर भारतीय रुपये (INR) और 1 किलो के हिसाब से गणितीय रूप से बदला गया है। वास्तविक MCX भाव में ड्यूटी/प्रीमियम के कारण बहुत मामूली अंतर हो सकता है।")
