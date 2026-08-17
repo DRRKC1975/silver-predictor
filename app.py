@@ -5,32 +5,55 @@ import time
 from streamlit_autorefresh import st_autorefresh
 
 # पेज कॉन्फ़िगरेशन
-st.set_page_config(page_title="Silver Pro Analyzer with Risk Management", layout="wide")
+st.set_page_config(page_title="Silver Pro Analyzer", layout="wide")
+
+# --- 🔒 सुरक्षा / पासवर्ड सेक्शन ---
+def check_password():
+    def password_entered():
+        if st.session_state["password"] == "Ravi@2026": 
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.text_input("🔒 कृपया सुरक्षित डैशबोर्ड देखने के लिए पासवर्ड दर्ज करें:", type="password", on_change=password_entered, key="password")
+        return False
+    elif not st.session_state["password_correct"]:
+        st.text_input("🔒 कृपया सुरक्षित डैशबोर्ड देखने के लिए पासवर्ड दर्ज करें:", type="password", on_change=password_entered, key="password")
+        st.error("❌ गलत पासवर्ड! कृपया पुनः प्रयास करें।")
+        return False
+    else:
+        return True
+
+if not check_password():
+    st.stop()  
+# ----------------------------------------------------
 
 # ऑटो-रिफ्रेश हर 5 मिनट
 st_autorefresh(interval=300000, key="silver_pro_refresh")
 
 st.title("🪙 सिल्वर प्रो (85% एक्यूरेसी + रिस्क मैनेजमेंट मॉडल)")
-st.markdown("यह डैशबोर्ड **रियल-टाइम लाइव डेटा, टेक्निकल इंडिकेटर्स (EMA + RSI)** और **ऑटो-कैलकुलेटेड स्टॉप-लॉस/टारगेट** के साथ हर 5 मिनट में अपडेट होता है।")
+st.markdown("यह डैशबोर्ड **रियल-टाइम लाइव डेटा (भारतीय रुपये ₹ में परिवर्तित)**, **टेक्निकल इंडिकेटर्स** और **स्टॉप-लॉस/टारगेट** के साथ हर 5 मिनट में अपडेट होता है।")
 
 symbol = "SI=F" 
 
 @st.cache_data(ttl=300)
 def get_advanced_data(ticker):
-    df = yf.download(ticker, period="5d", interval="15m")
+    # छुट्टी के दिनों में डेटा खाली न रहे इसलिए 5 दिन को 7 दिन कर दिया गया है
+    df = yf.download(ticker, period="7d", interval="15m")
+    if df.empty:
+        return df
     
-    # शुद्ध Pandas का उपयोग करके EMA की गणना (बिना किसी बाहरी लाइब्रेरी के)
     df['EMA_20'] = df['Close'].ewm(span=20, adjust=False).mean()
     df['EMA_50'] = df['Close'].ewm(span=50, adjust=False).mean()
     
-    # शुद्ध Pandas का उपयोग करके RSI की गणना
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
     loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
     
-    # शुद्ध Pandas का उपयोग करके ATR की गणना
     high_low = df['High'] - df['Low']
     high_close = (df['High'] - df['Close'].shift()).abs()
     low_close = (df['Low'] - df['Close'].shift()).abs()
@@ -40,30 +63,53 @@ def get_advanced_data(ticker):
     
     return df
 
-# डेटा लोड करें
-data = get_advanced_data(symbol)
-latest = data.iloc[-1]
+@st.cache_data(ttl=300)
+def get_usdinr():
+    # लाइव डॉलर का भारतीय रुपये में रेट फेच करने के लिए
+    try:
+        usd_inr_data = yf.download("INR=X", period="5d", interval="1d")
+        return float(usd_inr_data['Close'].iloc[-1])
+    except:
+        return 84.00 # अगर सर्वर फेल हो तो डिफॉल्ट रेट
 
-# सुरक्षित डेटा निष्कर्षण (Safe Data Extraction)
+data = get_advanced_data(symbol)
+
+# सुरक्षा कवच: यदि मार्केट बंद होने से डेटा नहीं आता है, तो एरर नहीं आएगा
+if data.empty:
+    st.warning("⚠️ अभी लाइव डेटा प्राप्त नहीं हो रहा है (संभवतः मार्केट बंद है या सर्वर अपडेट हो रहा है)। कृपया कुछ देर बाद रिफ्रेश करें।")
+    st.stop()
+
+latest = data.iloc[-1]
+usd_inr_rate = get_usdinr()
+
+# 1 ट्रॉय औंस = 31.103 ग्राम। 1 किलो = 32.15 ट्रॉय औंस।
+# भारतीय कस्टम ड्यूटी और प्रीमियम को मिलाकर MCX का गणितीय कन्वर्जन:
+conversion_multiplier = usd_inr_rate * 32.15 * 1.08  
+
 try:
-    current_price = float(latest['Close'].iloc[0]) if isinstance(latest['Close'], pd.Series) else float(latest['Close'])
+    raw_price = float(latest['Close'].iloc[0]) if isinstance(latest['Close'], pd.Series) else float(latest['Close'])
     rsi_val = float(latest['RSI'].iloc[0]) if isinstance(latest['RSI'], pd.Series) else float(latest['RSI'])
     ema20 = float(latest['EMA_20'].iloc[0]) if isinstance(latest['EMA_20'], pd.Series) else float(latest['EMA_20'])
     ema50 = float(latest['EMA_50'].iloc[0]) if isinstance(latest['EMA_50'], pd.Series) else float(latest['EMA_50'])
     atr_val = float(latest['ATR'].iloc[0]) if isinstance(latest['ATR'], pd.Series) else float(latest['ATR'])
 except:
-    current_price = float(latest['Close'])
+    raw_price = float(latest['Close'])
     rsi_val = float(latest['RSI'])
     ema20 = float(latest['EMA_20'])
     ema50 = float(latest['EMA_50'])
-    atr_val = float(latest['ATR']) if not pd.isna(latest['ATR']) else (current_price * 0.005)
+    atr_val = float(latest['ATR']) if not pd.isna(latest['ATR']) else (raw_price * 0.005)
 
-# डैशबोर्ड लेआउट
+# डॉलर को भारतीय रुपये (प्रति 1 किलोग्राम) में बदलना
+current_price_inr = raw_price * conversion_multiplier
+ema20_inr = ema20 * conversion_multiplier
+ema50_inr = ema50 * conversion_multiplier
+atr_val_inr = atr_val * conversion_multiplier
+
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Live Price (USD)", f"${current_price:.2f}")
+col1.metric("अनुमानित भाव (1 Kg)", f"₹ {current_price_inr:,.0f}")
 col2.metric("RSI (14)", f"{rsi_val:.2f}")
-col3.metric("EMA 20", f"${ema20:.2f}")
-col4.metric("EMA 50", f"${ema50:.2f}")
+col3.metric("EMA 20", f"₹ {ema20_inr:,.0f}")
+col4.metric("EMA 50", f"₹ {ema50_inr:,.0f}")
 
 st.markdown("---")
 st.subheader("🤖 प्रो-एल्गोरिदम निर्णय एवं रिस्क मैनेजमेंट")
@@ -71,15 +117,15 @@ st.subheader("🤖 प्रो-एल्गोरिदम निर्णय �
 if ema20 > ema50 and rsi_val < 70:
     verdict = "🟢 **BUY (मजबूत अपट्रेंड - लॉन्ग पोजीशन)**"
     conf = "85% संभावना - EMA बुलीश क्रॉसओवर और सही RSI जोन कन्फर्म है।"
-    stop_loss = current_price - (1.5 * atr_val)
-    target_1 = current_price + (2.0 * atr_val)
-    target_2 = current_price + (3.5 * atr_val)
+    stop_loss = current_price_inr - (1.5 * atr_val_inr)
+    target_1 = current_price_inr + (2.0 * atr_val_inr)
+    target_2 = current_price_inr + (3.5 * atr_val_inr)
 elif ema20 < ema50 and rsi_val > 30:
     verdict = "🔴 **SELL (मजबूत डाउनट्रेंड - शॉर्ट पोजीशन)**"
     conf = "85% संभावना - EMA बेयरिश क्रॉसओवर एक्टिव है।"
-    stop_loss = current_price + (1.5 * atr_val)
-    target_1 = current_price - (2.0 * atr_val)
-    target_2 = current_price - (3.5 * atr_val)
+    stop_loss = current_price_inr + (1.5 * atr_val_inr)
+    target_1 = current_price_inr - (2.0 * atr_val_inr)
+    target_2 = current_price_inr - (3.5 * atr_val_inr)
 else:
     verdict = "🟡 **NEUTRAL / SIDEWAYS (सावधान रहें)**"
     conf = "बाजार में स्पष्ट ट्रेंड की कमी है। फ्रेश ट्रेड से बचें।"
@@ -92,11 +138,12 @@ st.write(f"**कॉन्फिडेंस लेवल:** {conf}")
 
 if stop_loss > 0:
     st.markdown("---")
-    st.subheader("🛡️ रिस्क मैनेजमेंट और लेवल्स (Risk-Reward Plan)")
+    st.subheader("🛡️ रिस्क मैनेजमेंट और लेवल्स (MCX अनुमानित ₹)")
     r_col1, r_col2, r_col3 = st.columns(3)
-    r_col1.metric("🛑 अनुशंसित स्टॉप-लॉस (Stop-Loss)", f"${stop_loss:.2f}")
-    r_col2.metric("🎯 टारगेट 1 (Target 1)", f"${target_1:.2f}")
-    r_col3.metric("🚀 टारगेट 2 (Target 2)", f"${target_2:.2f}")
+    r_col1.metric("🛑 अनुशंसित स्टॉप-लॉस", f"₹ {stop_loss:,.0f}")
+    r_col2.metric("🎯 टारगेट 1", f"₹ {target_1:,.0f}")
+    r_col3.metric("🚀 टारगेट 2", f"₹ {target_2:,.0f}")
 
 st.markdown("---")
-st.caption(f"🔄 **ऑटो-अपडेट स्टेटस:** अंतिम बार अपडेट किया गया - {time.strftime('%Y-%m-%d %H:%M:%S')} (यह पेज हर 5 मिनट में स्वतः अपडेट होता है)")
+st.caption(f"🔄 **ऑटो-अपडेट स्टेटस:** अंतिम बार अपडेट किया गया - {time.strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption("नोट: यह भाव अंतरराष्ट्रीय कॉमेक्स (Comex) के आधार पर भारतीय रुपये (INR) और 1 किलो के हिसाब से गणितीय रूप से बदला गया है। वास्तविक MCX भाव में ड्यूटी/प्रीमियम के कारण बहुत मामूली अंतर हो सकता है।")
